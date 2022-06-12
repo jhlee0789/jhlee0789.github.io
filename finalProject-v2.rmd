@@ -1,0 +1,234 @@
+---
+title: "Final Project"
+author: "Junhee Lee"
+date: "`r Sys.Date()`"
+output: github_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(Matrix)
+library(far)
+library(MASS)
+library(pracma)
+library(lubridate)
+library(tidyverse)
+library(dlookr)
+```
+
+### Introduction
+* The purpose of this study is to find the subway station where the delay of the subway line is majorly occured
+
+* To solve this problem, the data below has been used
+  - Operated subway data
+  - Scheduled subway data
+
+* The time and space considered for this study is written as below
+  - Target space: Seoul metro line 9 bound to VHS Medical Center (Gimpo Int'l Airport → VHS Medical Center)
+  - Target time: 03/08/2021 ~ 03/12/2021, morning peak time (07:00~10:00)
+  
+* There are two types of subway exist on line 9: local train & express train
+  - Local train: stops at all station
+  - Express train: stops only at some stations
+  - In this study, only express train is considered
+  
+![Image from theissaclee.com](https://w.namu.la/s/79add8bc7809eacbc47c6e76b0a8575c5105d0276322fbe24347e5134a91934f9838bfff352b664397b975695b691ebd14fdb9fe9da20d6f3270387e36f362c117821a6a2dc4b39cfdc440b1d0ab47bd2f74ebd284f620dc550aaa4aa934aed5){width=50%}
+
+
+### Data Analysis
+* Considered two type of delay time: arrival delay & departure delay
+  - Arrival delay: difference between operated subway arrival time and scheduled subway arrival time
+  - Departure delay: difference between operated subway departure time and scheduled subway departure time
+  - In this study, information of arrival delay and departure delay from terminal stations have been excluded
+  
+
+```{r, include=FALSE}
+## csv 파일 불러온 후 급행열차 정보만 발췌후 return
+## 급행열차는 9512~9560 사용
+readAndCrop = function(fileName){
+  tTable = read.csv(fileName)
+  tTable = tTable[(tTable$directAt==1) & (tTable$TRNID>=9520) & (tTable$TRNID<=9552),
+                  c(2,5,7,10,13,15,17,20,23,25,27,29,30,33,36,38)+7]
+  return(tTable)
+}
+
+calcDelayTime = function(operTtable,schedTtable,delayTtable){
+  for (i in 1:nrow(operTtable)){
+    for (j in 1:ncol(operTtable)){
+      tmpDelay = ymd_hms(operTtable[i,j]) - ymd_hms(schedTtable[i,j])
+      delayTtable[i,j] = as.numeric(tmpDelay,units="secs")
+    }
+  }
+  return(delayTtable)
+}
+
+buildDelayTtable = function(oDate){ # oDate = "2021-03-08"
+    
+  ## 파일 불러오기
+  operArrTtable = readAndCrop(paste0("D:/Users/jhlee/OneDrive - 고려대학교/10-rawDataSet/rtSubway_Data/2_data/rtPosition/Line9/oDate-20210308-20210312/",oDate,"-Line9-bnd1-rtPos_arr_trueTtable-true_files-210622.csv"))
+  operDepTtable = readAndCrop(paste0("D:/Users/jhlee/OneDrive - 고려대학교/10-rawDataSet/rtSubway_Data/2_data/rtPosition/Line9/oDate-20210308-20210312/",oDate,"-Line9-bnd1-rtPos_dep_trueTtable-true_files-210622.csv"))
+  
+  schedArrTtable = readAndCrop(paste0("D:/Users/jhlee/OneDrive - 고려대학교/10-rawDataSet/rtSubway_Data/2_data/rtTimeTable/Line9/oDate-20210301-20210331/",oDate,"-Line9-bnd1-arr_planTable-week-210623_true.csv"))
+  schedDepTtable = readAndCrop(paste0("D:/Users/jhlee/OneDrive - 고려대학교/10-rawDataSet/rtSubway_Data/2_data/rtTimeTable/Line9/oDate-20210301-20210331/",oDate,"-Line9-bnd1-dep_planTable-week-210623_true.csv"))
+  
+  
+  ## operTtable과 schedTtable의 차이로 delay 계산하기
+  arrDelayTtable = operArrTtable
+  arrDelayTtable[,] = NA
+  depDelayTtable = arrDelayTtable
+  
+  arrDelayTtable = calcDelayTime(operArrTtable,schedArrTtable,arrDelayTtable)
+  depDelayTtable = calcDelayTime(operDepTtable,schedDepTtable,depDelayTtable)
+  
+  delayTimeDf = data.frame("oDate"=as.character(),"trnId"=as.character(),"stnId"=as.character(),
+                           "arrDelay"=as.character(),"depDelay"=as.character())
+  for (i in 1:nrow(depDelayTtable)){
+    for (j in 1:ncol(depDelayTtable)){
+      tmpDf = data.frame("oDate"=oDate,"trnId"=rownames(depDelayTtable)[i],"stnId"=colnames(depDelayTtable)[j],
+                         "arrDelay"=arrDelayTtable[i,j],"depDelay"=depDelayTtable[i,j])
+      delayTimeDf = rbind(delayTimeDf,tmpDf)
+    }
+  }
+    
+  convDepDelayTtable = depDelayTtable - depDelayTtable[,1]
+  convArrDelayTtable = arrDelayTtable - depDelayTtable[,1]
+  
+  convDelayTimeDf = data.frame("oDate"=as.character(),"trnId"=as.character(),"stnId"=as.character(),
+                           "arrDelay"=as.character(),"depDelay"=as.character())
+  for (i in 1:nrow(depDelayTtable)){
+    for (j in 1:ncol(depDelayTtable)){
+      tmpDf = data.frame("oDate"=oDate,"trnId"=rownames(convDepDelayTtable)[i],"stnId"=colnames(convDepDelayTtable)[j],
+                         "arrDelay"=convArrDelayTtable[i,j],"depDelay"=convDepDelayTtable[i,j])
+      convDelayTimeDf = rbind(convDelayTimeDf,tmpDf)
+    }
+  }
+  
+  return(list(delayTimeDf,convDelayTimeDf))
+}
+
+delayTimeDf = list()
+convDelayTimeDf = list()
+
+for (i in 8:12){ # i=8
+  if (i<10){oDate=paste0(0,i)}else{oDate=i}
+  print(oDate)
+  delayTtableRes = buildDelayTtable(paste0("2021-03-",oDate))
+  delayTimeDf = append(delayTimeDf,list(delayTtableRes[[1]]))
+  convDelayTimeDf = append(convDelayTimeDf,list(delayTtableRes[[2]]))
+}
+delayTimeDf = Reduce(rbind,delayTimeDf)
+convDelayTimeDf = Reduce(rbind,convDelayTimeDf)
+
+delayTimeDf$depDelay[delayTimeDf$stnId=="X4138"] = NA
+delayTimeDf$arrDelay[delayTimeDf$stnId=="X4102"] = NA
+convDelayTimeDf$depDelay[convDelayTimeDf$stnId=="X4138"] = NA
+convDelayTimeDf$arrDelay[convDelayTimeDf$stnId=="X4102"] = NA
+```
+
+* The distribution of arrival delay time and departure delay time of each station is shown as below
+```{r, echo=FALSE}
+boxplot(depDelay~stnId,data=delayTimeDf,
+        main = "Departure delay time of each station at morning peak",
+        xlab = "Station ID",
+        ylab = "Delay Time (seconds)") 
+abline(h=0,col="#ff7f0e")
+abline(h=180,col="#ff7f0e")
+boxplot(arrDelay~stnId,data=delayTimeDf,
+        main = "Arrival delay time of each station at morning peak",
+        xlab = "Station ID",
+        ylab = "Delay Time (seconds)")
+abline(h=0,col="#ff7f0e")
+abline(h=180,col="#ff7f0e")
+```
+
+* Convert delay time by subtract the departure delay time of the origin of the train (X4102, Gimpo Int'l Ariport)
+```{r,echo=FALSE}
+boxplot(depDelay~stnId,data=convDelayTimeDf,
+        main = "Converted departure delay time of each station at morning peak",
+        xlab = "Station ID",
+        ylab = "Delay Time (seconds)") 
+abline(h=0,col="#ff7f0e")
+abline(h=180,col="#ff7f0e")
+boxplot(arrDelay~stnId,data=convDelayTimeDf,
+        main = "Converted arrival delay time of each station at morning peak",
+        xlab = "Station ID",
+        ylab = "Delay Time (seconds)")
+abline(h=0,col="#ff7f0e")
+abline(h=180,col="#ff7f0e")
+```
+
+
+* The delay time increases at stations whose ID is between X4113 and X4120
+
+* The delay time decreases at stations whose ID is between X4123 and X4130
+
+
+
+### Analysis of Data Correlation
+* Correlation of arrival delay and departure delay from current station and previous station
+  - Arrival delay and departure delay has high correlation
+  - Compared with previous station, arrival delay from current station and departure delay from previous station has the highest correlation
+
+```{r, echo=FALSE, warning=FALSE}
+stnIdList = c(4102,4105,4107,4110,4113,4115,4117,4120,4123,4125,4127,4129,4130,4133,4136,4138)
+stnIdList = paste0("X",stnIdList)
+
+delayTimeDf2 = delayTimeDf
+
+for (i in 1:nrow(delayTimeDf2)){
+  # i=10
+  tmpODate = delayTimeDf2$oDate[i]
+  tmpTrnId = delayTimeDf2$trnId[i]
+  tmpIndex = which(stnIdList==delayTimeDf2$stnId[i])-1
+  if (tmpIndex==0){next}
+  tmpStnId = stnIdList[tmpIndex]
+  
+  delayTimeDf2$preStnArrDelay[i] = delayTimeDf$arrDelay[delayTimeDf$oDate==tmpODate & 
+                                                          delayTimeDf$trnId==tmpTrnId & 
+                                                          delayTimeDf$stnId==tmpStnId]
+  delayTimeDf2$preStnDepDelay[i] = delayTimeDf$depDelay[delayTimeDf$oDate==tmpODate & 
+                                                          delayTimeDf$trnId==tmpTrnId & 
+                                                          delayTimeDf$stnId==tmpStnId]
+}
+
+plot_correlate(delayTimeDf2)
+
+
+delayTimeDf2 %>% 
+      dlookr::target_by(depDelay) %>% 
+      dlookr::relate(arrDelay) %>%
+      plot()
+
+delayTimeDf2 %>% 
+      dlookr::target_by(preStnDepDelay) %>% 
+      dlookr::relate(arrDelay) %>%
+      plot()
+
+```
+
+
+* Correlation for each station
+  - In many station, correlation of departure delay from previous station and arrival delay from current station is higher than correlation of departure delay and arrival delay from current station
+  - However, at the section between X4110 and X4113, X4113 and X4115, X4120 and X4123, X4130 and X4133, departure delay from previous station and arrival delay from current station does not shown the correlation better than departure delay and arrival delay from current station
+```{r,echo=FALSE, warning=FALSE}
+
+for (i in 2:15){
+  delayTimeDf3 = delayTimeDf2[delayTimeDf2$stnId==stnIdList[i],]
+  
+  print(paste0("Previous Station ID: ",stnIdList[i-1]))
+  print(paste0("Current Station ID: ",stnIdList[i]))
+  
+  delayTimeDf3 %>% 
+        dlookr::target_by(depDelay) %>% 
+        dlookr::relate(arrDelay) %>%
+        plot()
+  
+  delayTimeDf3 %>% 
+        dlookr::target_by(preStnDepDelay) %>% 
+        dlookr::relate(arrDelay) %>%
+        plot()
+  
+}
+
+```
+
